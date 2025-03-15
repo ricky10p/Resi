@@ -1,7 +1,7 @@
 import json
-import os
 import requests
 import html
+import os
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 ITEMS_PER_PAGE = 5
