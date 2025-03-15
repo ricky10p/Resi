@@ -2,7 +2,8 @@ import os
 import html
 import time
 import threading
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
 from telebot import TeleBot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from openpyxl import load_workbook
@@ -57,7 +58,7 @@ def start_bot(token):
                     bot.reply_to(message, "❌ Nama minimal 3 karakter")
                     return
                 user_states[user_id] = {"name": query, "state": "waiting_for_phone"}
-                bot.reply_to(message, "📱 Masukkan nomor HP penerima (contoh: 081234567890):")
+                bot.reply_to(message, "📱 Masukkan nomor HP penerima:")
                 return
 
             elif isinstance(state, dict) and state.get("state") == "waiting_for_phone":
@@ -66,7 +67,7 @@ def start_bot(token):
                     return
                 user_states[user_id]["phone"] = query
                 user_states[user_id]["state"] = "waiting_for_address"
-                bot.reply_to(message, "🏠 Masukkan alamat lengkap (contoh: Jl. Merdeka No. 12, RT 001/RW 002):")
+                bot.reply_to(message, "🏠 Masukkan alamat lengkap:")
                 return
 
             elif isinstance(state, dict) and state.get("state") == "waiting_for_address":
@@ -111,7 +112,7 @@ def start_bot(token):
             user_states[user_id]["state"] = "waiting_for_cod"
 
         markup = create_cod_buttons(user_id)
-        bot.send_message(call.message.chat.id, "_COD Ongkir:", reply_markup=markup)
+        bot.send_message(call.message.chat.id, "COD Ongkir:", reply_markup=markup)
         bot.answer_callback_query(call.id)
 
     @bot.callback_query_handler(func=lambda call: call.data.startswith('COD_'))
@@ -218,6 +219,60 @@ def start_bot(token):
         bot.send_message(call.message.chat.id, response_text, reply_markup=markup, parse_mode='HTML')
         bot.answer_callback_query(call.id)
 
+    @bot.callback_query_handler(func=lambda call: call.data.startswith('BACK_'))
+    def handle_back(call):
+        if not validate_user(call):
+            bot.answer_callback_query(call.id, "Unauthorized access")
+            return
+
+        user_id = int(call.data.split('_')[1])
+        results = session_manager.get_results(user_id)
+        if not results:
+            bot.answer_callback_query(call.id, "Sesi telah berakhir")
+            return
+
+        msg_content = format_results_message(results, 1)
+        markup = create_number_buttons(results, 1, user_id)
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text=f"🔍 Ditemukan {len(results)} hasil:\n{msg_content}",
+            reply_markup=markup,
+            parse_mode='HTML'
+        )
+        bot.answer_callback_query(call.id)
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith('BACKDETAIL_'))
+    def handle_back_detail(call):
+        if not validate_user(call):
+            bot.answer_callback_query(call.id, "Unauthorized access")
+            return
+
+        user_id = int(call.data.split('_')[1])
+        selected_address = session_manager.get_selected_address(user_id)
+        if not selected_address:
+            bot.answer_callback_query(call.id, "Alamat tidak tersedia")
+            return
+
+        detail = (
+            "🔍 DETAIL LENGKAP\n"
+            f"🏘️ Kelurahan: {html.escape(selected_address['kelurahan'])}\n"
+            f"📍 Kecamatan: {html.escape(selected_address['kecamatan'])}\n"
+            f"🏙️ Kota/Kab: {html.escape(selected_address['kota'])}\n"
+            f"🌏 Provinsi: {html.escape(selected_address['provinsi'])}\n"
+            f"📮 Kode Pos: {selected_address['kode_pos']}\n"
+            f"🔑 Kode Kemendagri: {html.escape(selected_address['kode_kemendagri'])}"
+        )
+        markup = create_detail_buttons(user_id)
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text=detail,
+            reply_markup=markup,
+            parse_mode='HTML'
+        )
+        bot.answer_callback_query(call.id)
+
     @bot.callback_query_handler(func=lambda call: call.data.startswith('CETAKRESI_'))
     def handle_cetak_resi(call):
         if not validate_user(call):
@@ -250,7 +305,7 @@ def start_bot(token):
             return
 
         try:
-            safe_name = "".join(c for c in user_data['name'] if c.isalnum() or c in (' ', '_')).rstrip()
+            safe_name = sanitize_filename(user_data['name'])
             timestamp = int(time.time())
             output_path = f"data/resi_{safe_name}_{timestamp}.xlsx"
 
@@ -300,8 +355,11 @@ def start_bot(token):
 
     def create_cod_buttons(user_id):
         markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton("COD Ongkir ❌", callback_data=f"COD_{user_id}_NO"))
-        markup.add(InlineKeyboardButton("COD Ongkir ✅", callback_data=f"COD_{user_id}_YES"))
+        markup.add(InlineKeyboardButton("COD ❌", callback_data=f"COD_{user_id}_NO"))
+        markup.add(InlineKeyboardButton("COD ✅", callback_data=f"COD_{user_id}_YES"))
         return markup
+
+    def sanitize_filename(filename):
+        return re.sub(r'[\\/*?:"<>|]', "_", filename)
 
     bot.infinity_polling()
